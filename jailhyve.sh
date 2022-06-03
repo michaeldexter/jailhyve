@@ -20,6 +20,7 @@
 # HARD CODED VARIABLES
 
 host_nic="em0"
+# Hard coded for now
 
 # REQUIREMENTS
 essential_directories="/dev /etc /tmp"
@@ -169,8 +170,8 @@ done
 echo Generating the exec.prepare script
 cat << EOF > ${1}/exec.prepare
 echo Entering exec.prepare on the host
-#kldstat -q -m vmm || kldload vmm
-#kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
+kldstat -q -m vmm || kldload vmm
+kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
 kldstat -q -m vmm || { echo vmm is not loaded ; exit 1 ; }
 echo Loading nmdm if needed
 kldstat -q -m nmdm || kldload nmdm
@@ -180,7 +181,8 @@ echo Manually configuring VM networking but not cleaning previous configuration
 
 ifconfig tap0 create
 ifconfig bridge0 create
-ifconfig bridge0 addm $host_nic addm tap0 
+ifconfig bridge0 addm em0
+ifconfig bridge0 addm tap0 
 ifconfig bridge0 up
 
 ifconfig bridge0
@@ -256,7 +258,7 @@ jailhyve {
 #	persist;
 	host.hostname = jailhyve;
 	ip4.addr = 10.0.0.111;
-	interface = "$host_nic";
+	interface = "em0";
 	path = "$1";
 	mount.devfs;
 	exec.prepare = "/bin/sh -x $1/exec.prepare";
@@ -264,7 +266,7 @@ jailhyve {
 	exec.start = "/bin/sh -x /etc/rc";
 	exec.stop = "/bin/sh -x /etc/rc.shutdown jail";
 	exec.poststop = "/bin/sh -x $1/exec.poststop";
-	#vnet;
+#	vnet;
 }
 EOF
 
@@ -374,6 +376,26 @@ fi
 
 echo ; echo Generating the boot-jailed-vm.sh script ; echo
 cat << EOF > ${1}/boot-jailed-vm.sh
+# Adding the exec.prepare steps here as exec.prepare is not working
+kldstat -q -m vmm || kldload vmm
+kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
+kldstat -q -m vmm || { echo vmm is not loaded ; exit 1 ; }
+echo Loading nmdm if needed   
+kldstat -q -m nmdm || kldload nmdm
+kldstat -q -m nmdm || { echo nmdm failed to load ; exit 1 ; }
+
+echo Manually configuring VM networking but not cleaning previous configuration
+
+ifconfig tap0 create
+ifconfig bridge0 create
+ifconfig bridge0 addm em0 addm tap0
+ifconfig bridge0 up
+
+ifconfig bridge0
+
+echo Setting net.link.tap.up_on_open=1
+sysctl net.link.tap.up_on_open=1
+
 jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve ; jls
 echo
 echo You can connect to the VM with:

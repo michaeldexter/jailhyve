@@ -12,6 +12,8 @@ Road Block
 
 "device emulation initialization error: No such file or directory"
 
+exec.prepare is not executing
+
 
 Requirements
 
@@ -31,4 +33,4 @@ i.e.
 sudo mkdir /tmp/jailhyve
 sudo sh jailhyve.sh /tmp/jailhyve jailhyve
 
-
+Note that bhyve(8) errors are logged to error.log
