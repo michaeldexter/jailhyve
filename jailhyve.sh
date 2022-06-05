@@ -25,7 +25,7 @@ host_nic="em0"
 # REQUIREMENTS
 essential_directories="/dev /etc /tmp"
 essential_files="/libexec/ld-elf.so.1 /boot/userboot.so"
-essential_utilities="bhyve bhyvectl bhyveload iasl pkill sh ls rm truss id file"
+essential_utilities="bhyve bhyvectl bhyveload iasl pkill sh ls rm truss id file ifconfig ping"
 optional_utilities="grub-bhyve"
 optional_directories="/usr/local/share/uefi-firmware"
 
@@ -71,6 +71,7 @@ devfs rule -s 100 show
 
 # All this not to remove the VM image. Terrible but works for now
 rm -rf $1/bin
+rm -rf $1/sbin
 rm -rf $1/boot
 rm -rf $1/dev
 rm -rf $1/etc
@@ -78,7 +79,6 @@ rm -rf $1/usr
 rm -rf $1/lib
 rm -rf $1/libexec
 rm -rf $1/tmp
-rm $1/bhyve*
 rm $1/e*
 rm $1/jail.conf # Do not remove jailhyve.raw!
 
@@ -115,10 +115,11 @@ for utility in $essential_utilities ; do
 	mkdir -p ${1}$util_dir || \
 		{ echo mkdir -p $util_dir failed ; exit 1 ; }
 #	[ -f ${1}$utility ] && chflags 0 ${1}$utility
-	if ! [ -f ${1}$utility ] ; then
+# Given the brutal clean-up, there should be no need to test in advance
+#	if ! [ -f ${1}$utility ] ; then
 		cp -npv $util_path ${1}${util_dir}/ || \
 			{ echo $util_path failed to copy  ; exit 1 ; }
-	fi
+#	fi
 
 # NOTE THE KLUGE TO GET AROUND 14-CURRENT vdso breaking ldd output
 #ldd -f '%p\n' `which bhyve`
@@ -184,9 +185,12 @@ cat << EOF > ${1}/exec.prepare
 #!/bin/sh
 echo Entering exec.prepare on the host
 
-kldstat -q -m vmm || kldload vmm
-kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
-kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
+# It would appear that the jail command really wants
+# security.jail.param.allow.vmm set, which is only present once vmm is loaded
+# Thus, it may not be possible to do any amount of vmm handling in exec.prepare
+#kldstat -q -m vmm || kldload vmm
+#kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
+#kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
 echo Loading nmdm if needed
 kldstat -q -m nmdm || kldload nmdm
 kldstat -q -m nmdm || { echo nmdm failed to load ; exit 1 ; }
@@ -198,22 +202,39 @@ echo Tearing down VM networking and re-creating
 
 [ -e /dev/tap0 ] && ifconfig tap0 destroy
 [ -e /dev/bridge0 ] && ifconfig bridge0 destroy
+[ -e /dev/epair0 ] && ifconfig epair0 destroy
+[ -e /dev/epair0a ] && ifconfig epair0a destroy
+[ -e /dev/epair0b ] && ifconfig epair0b destroy
 
+ifconfig
+sleep 2
 echo Building up VM networking
 
-ifconfig tap0 create
+#ifconfig tap0 create
 ifconfig bridge0 create
+ifconfig epair0 create up
+#ifconfig epair0a up
+#ifconfig epair0b up
 ifconfig bridge0 addm em0
-ifconfig bridge0 addm tap0 
-ifconfig bridge0 up
+#ifconfig bridge0 addm tap0 up
+ifconfig bridge0 addm epair0a up
+# Is, or is not this a thing?
+ifconfig epair0b vnet jailhyve
+#ifconfig bridge0 up
 
-ifconfig bridge0
+#ifconfig bridge0
 
 # Not preserving the state of these
 
 echo Setting net.link.tap.up_on_open=1
 sysctl net.link.tap.up_on_open=1
 #net.link.tap.user_open=1
+
+# Why does this report this?
+# umount: /root/jailhyve/dev: not a file system root directory
+[ -e ${1}/dev/zero ] && umount ${1}/dev
+[ -e ${1}/dev/zero ] && umount ${1}/dev
+[ -e ${1}/dev/zero ] && umount ${1}/dev
 
 #echo Exiting exec.prepare on the host
 #echo DEBUG Look good? ; read good
@@ -238,19 +259,20 @@ echo running devfs rule -s 100 show
 devfs rule -s 100 show
 
 # Tight
-devfs rule -s 100 add path vmm.io unhide
-devfs rule -s 100 add path vmm.io/jailhyve.bootrom unhide
-devfs rule -s 100 add path vmm/jailhyve unhide
-devfs rule -s 100 add path tap0 unhide
-devfs rule -s 100 add path nmdm1A unhide
+#devfs rule -s 100 add path vmm.io unhide
+#devfs rule -s 100 add path vmm.io/jailhyve.bootrom unhide
+#devfs rule -s 100 add path vmm/jailhyve unhide
+#devfs rule -s 100 add path tap0 unhide
+#devfs rule -s 100 add path nmdm1A unhide
 
 # Loose
-#devfs rule -s 100 add path vmm.io unhide
-#devfs rule -s 100 add path vmm.io/* unhide
-#devfs rule -s 100 add path vmm unhide
-#devfs rule -s 100 add path vmm/* unhide
-#devfs rule -s 100 add path tap* unhide
-#devfs rule -s 100 add path nmdm* unhide
+devfs rule -s 100 add path vmm.io unhide
+devfs rule -s 100 add path vmm.io/* unhide
+devfs rule -s 100 add path vmm unhide
+devfs rule -s 100 add path vmm/* unhide
+devfs rule -s 100 add path tap* unhide
+devfs rule -s 100 add path nmdm* unhide
+devfs rule -s 100 add path epair0* unhide
 
 echo running devfs rule -s 100 show
 devfs rule -s 100 show
@@ -260,6 +282,9 @@ devfs rule -s 100 show
 #echo DEBUG looking for cu/nmdm processes
 #ps | grep nmdm
 #ps | grep cu
+
+echo DEBUG listing /dev
+ls /dev
 
 #echo Exiting exec.prestart on the host
 #echo DEBUG Look good? ; read good
@@ -282,16 +307,26 @@ jailhyve {
 	allow.raw_sockets;
 #	persist;
 	host.hostname = jailhyve;
-	ip4.addr = 10.0.0.111;
-	interface = "em0";
+#	ip4.addr = 10.0.0.111;
+#	interface = "em0";
 	path = "$1";
 	mount.devfs;
+	vnet;
+	vnet.interface = "epair0b";
 	exec.prepare = "/bin/sh -x $1/exec.prepare";
 	exec.prestart = "/bin/sh -x $1/exec.prestart";
-	exec.start = "/bin/sh -x /etc/rc";
+#	exec.start = "/sbin/ifconfig epair0b name vnet0";
+# /32?
+#	exec.start = "/sbin/ifconfig epair0b inet 10.0.0.111/24 up";
+	exec.start = "/sbin/ifconfig epair0b inet 10.0.0.111 up";
+	exec.start += "/sbin/ifconfig tap0 create";
+	exec.start += "/sbin/ifconfig bridge0 create";
+	exec.start += "/sbin/ifconfig bridge0 addm epair0b";
+	exec.start += "/sbin/ifconfig bridge0 addm tap0";
+	exec.start += "/sbin/ifconfig bridge0 up";
+	exec.start += "/bin/sh -x /etc/rc";
 	exec.stop = "/bin/sh -x /etc/rc.shutdown jail";
 	exec.poststop = "/bin/sh -x $1/exec.poststop";
-#	vnet;
 }
 EOF
 
@@ -406,6 +441,10 @@ fi
 echo Generaing a manual bhyve launch script just to be safe
 
 cat << EOF > ${1}/manual-launch.sh
+
+# It would appear that this MUST take place before executing the jail command
+kldstat -q -m vmm || kldload vmm
+
 [ -e /dev/vmm/jailhyve ] && \
 	{ bhyvectl --destroy --vm=jailhyve ; sleep 2 ; }
 
@@ -473,13 +512,25 @@ fi
 echo ; echo Generating the launch-jailed-vm.sh script ; echo
 cat << EOF > ${1}/launch-jailed-vm.sh
 #!/bin/sh
-jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve || \\
+# It would appear that this MUST take place before executing the jail command
+kldstat -q -m vmm || kldload vmm
+
+echo Destroying /dev/vmm/jailhyve if present
+[ -e /dev/vmm/jailhyve ] && \
+	{ bhyvectl --destroy --vm=jailhyve ; sleep 3 ; }
+
+echo Destroying jail jailhyve without checking if present
+jail -r jailhyve
+
+echo Running jail -c -f $1/jail.conf jailhyve
+jail -c -f $1/jail.conf jailhyve || \\
 	{ echo Jail failed to launch ; exit 1 ; }
 
+echo Running jls
 jls
 echo
-echo You can connect to the VM with:
-echo "cu -l /dev/nmdm1B"
+#echo You can connect to the VM with:
+#echo "cu -l /dev/nmdm1B"
 EOF
 
 echo

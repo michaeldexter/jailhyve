@@ -8,20 +8,10 @@ You are strongly encouraged to run this on a test system or on a nesting hypervi
 
 Hard-Coded Variables
 
-nic is em0
+The nic is em0
 VM IP is 10.0.0.111
 
 These will be configurable but you probably want to change them for now
-
-
-Road Block
-
-/dev/tap0 is not working. Perhaps the issue is obvious to you?
-
-"device emulation initialization error: No such file or directory"
-
-Remove the tap device from bhyve.conf on a 13.1 or later system
-or etc/rc on a 12.x or 13.0 system
 
 
 Requirements
@@ -57,5 +47,3 @@ Run the manual-launch.sh script to verify the non-jailed syntax
 
 The bhyve(8) syntax is not de-duplicated, meaning that if you change it, you
 will want to change it in three places
-
-This is all very volatile but hey, it is development in public
