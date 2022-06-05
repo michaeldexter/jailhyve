@@ -41,6 +41,18 @@ if [ "$1" = "/" ] ; then
 	exit 1
 fi
 
+
+# DETERMINE HOST VERSION
+
+# 12* introduced jailing support
+# 13.1 introduced bhyve_config
+ 
+version=$( freebsd-version | cut -d - -f1 )
+major_version=$( echo $version | cut -d . -f1 )
+
+[ "$major_version" -le "11" ] && \
+	{ echo FreeBSD 11.* and earlier are not supported ; exit 1 ; }
+
 # BRUTAL CLEANUP WHILE EXPERIMENTAL
 
 echo Performing cleanup
@@ -83,7 +95,7 @@ done
 echo ; echo ESSENTIAL FILES ; echo
 
 for file in $essential_files ; do
-	echo DEBUG Working on $file
+#	echo DEBUG Working on $file
 	file_dir=$( dirname $file )
 	mkdir -p ${1}$file_dir || \
 		{ echo mkdir -p $file_dir failed ; exit 1 ; }
@@ -97,7 +109,7 @@ done
 echo ; echo ESSENTIAL UTILITIES; echo
 
 for utility in $essential_utilities ; do
-	echo DEBUG Working on $utility
+#	echo DEBUG Working on $utility
 	util_path=$( which $utility || { echo $utility missing ; exit 1 ; } )
 	util_dir=$( dirname $util_path )
 	mkdir -p ${1}$util_dir || \
@@ -132,7 +144,7 @@ done
 echo ; echo OPTIONAL UTILITIES ; echo
 
 for utility in $optional_utilities ; do
-	echo DEBUG Working on $utility
+#	echo DEBUG Working on $utility
 	util_path=$( which $utility )
 	util_dir=$( dirname $util_path )
 	mkdir -p ${1}$util_dir || \
@@ -196,7 +208,7 @@ sysctl net.link.tap.up_on_open=1
 exit 0
 EOF
 
-cat ${1}/exec.prepare
+#cat ${1}/exec.prepare
 
 
 echo Generating the exec.prestart script
@@ -241,7 +253,7 @@ devfs rule -s 100 show
 exit 0
 EOF
 
-cat ${1}/exec.prestart
+#cat ${1}/exec.prestart
 
 
 echo Generating jail.conf
@@ -270,16 +282,15 @@ jailhyve {
 }
 EOF
 
-cat ${1}/jail.conf
+#cat ${1}/jail.conf
 
 #echo DEBUG Look good? ; read good
 
-echo Generating the etc/rc script
+echo Generating the etc/rc script header
 cat << EOF > ${1}/etc/rc
 #!/bin/sh
 set -x
-echo Entering /etc/rc in the jail
-
+echo Executing /etc/rc in the jail
 
 echo DEBUG Listing Directories
 ls /
@@ -293,11 +304,74 @@ ls /
 #echo DEBUG Look good? ; read good
 
 
-echo Running bhyve
+echo Executing the bhyve command
 # Loop syntax from vmrun.sh
-while [ 1 ]; do
+# Disabling it for debugging, note the two dones that close it
+#while [ 1 ]; do
 
 	# FYI: an ampersand at the next of this will panic the host:
+EOF
+# Splitting the rc script generation to handle with/without bhyve_config
+
+echo Generating the etc/rc script footer
+
+if [ "$major_version" = "12" -o "$version" = "13.0" ] ; then
+	echo bhyve_config support not detected
+
+	cat << EOF >> ${1}/etc/rc
+bhyve -c 1 -m 1024 -A -H -P \\
+        -s 0,hostbridge \\
+        -s 31,lpc \\
+        -l com1,stdio \\
+        -s 2,virtio-blk,jailhyve.raw \\
+        -s 3,virtio-net,tap0 \\
+        -l bootrom,/usr/local/share/uefi-firmware/BHYVE_UEFI.fd \\
+        -s 30:0,fbuf,tcp=0.0.0.0:5900,w=640,h=480,wait \\
+        -s 30:1,xhci,tablet \\
+        jailhyve 2> /error.log
+
+# Removing the null modem device while testing
+# 	-l com1,/dev/nmdm1A \\
+# Alternatively
+#        -l com1,stdio \\
+
+	bhyve_exit=\$?
+	if [ \$bhyve_exit -ne 0 ]; then
+		break
+		# Verify if this is terminating the process/VM/Jail
+		exit
+	fi
+#done
+
+echo Exiting /etc/rc in the jail
+exit 0
+EOF
+else
+	echo bhyve_config support detected
+echo Generating bhyve.conf
+
+bhyve -o config.dump=1 \
+	-c 1 -m 1024 -A -H -P \
+	-s 0,hostbridge \
+	-s 31,lpc \
+	-l com1,stdio \
+	-s 2,virtio-blk,jailhyve.raw \
+	-s 3,virtio-net,tap0 \
+	-l bootrom,/usr/local/share/uefi-firmware/BHYVE_UEFI.fd \
+	-s 30:0,fbuf,tcp=0.0.0.0:5900,w=640,h=480,wait \
+	-s 30:1,xhci,tablet \
+	jailhyve | grep -v config.dump > ${1}/bhyve.conf
+
+# Removing the null modem device while testing
+#	-l com1,/dev/nmdm1A \
+# Alternatively
+#	-l com1,stdio \
+
+#	cat ${1}/bhyve.conf
+#echo DEBUG Look good? ; read good
+
+	# Generate the etc/rc footer
+	cat << EOF >> ${1}/etc/rc
 	/usr/sbin/bhyve -k /bhyve.conf 2> /error.log
 
 	bhyve_exit=\$?
@@ -306,20 +380,23 @@ while [ 1 ]; do
 		# This is not terminating the process/VM/Jail
 		exit
 	fi
-done
+#done
 
 echo Exiting /etc/rc in the jail
 exit 0
 EOF
+fi
 
-cat ${1}/etc/rc
+#cat ${1}/etc/rc
+
 
 echo Generating the exec.stop script
 cat << EOF > ${1}/etc/rc.shutdown
 # exec.stop = "/bin/sh /etc/rc.shutdown jail";
 pkill bhyve
 sleep 5
-# Fancy waiting games
+# Insert fancy waiting and testing games
+
 [ -e /dev/vmm/jailhyve ] && bhyvectl --destroy --vm=jailhyve
 # Fancy waiting games
 # Insert fancy termination
@@ -328,7 +405,7 @@ sleep 5
 exit 0
 EOF
 
-cat ${1}/etc/rc.shutdown
+#cat ${1}/etc/rc.shutdown
 
 echo Gengerating the exec.poststop script
 cat << EOF > ${1}/exec.poststop
@@ -344,59 +421,22 @@ devfs rule -s 100 delset
 exit 0
 EOF
 
-cat ${1}/exec.poststop
+#cat ${1}/exec.poststop
 
-echo Generating bhyve.conf
 
-bhyve -o config.dump=1 \
-	-c 1 -m 1024 -H -A \
-	-l bootrom,/usr/local/share/uefi-firmware/BHYVE_UEFI.fd \
-	-s 0:0,hostbridge \
-	-s 3:0,virtio-blk,/jailhyve.raw \
-	-s 30:0,fbuf,tcp=0.0.0.0:5900,w=640,h=480,wait \
-	-s 30:1,xhci,tablet \
-	-s 31:0,lpc \
-	jailhyve | grep -v config.dump > ${1}/bhyve.conf
-
-# Sometimes causes trouble
-#	-l com1,/dev/nmdm1A \
-# Consistently causes trouble
-#	-s 5:0,virtio-net,/dev/tap0 \
-
-	cat ${1}/bhyve.conf
-
-#echo DEBUG Look good? ; read good
-
-[ $( which tree ) ] && tree $1
+#[ $( which tree ) ] && tree $1
 
 if ! [ -f "$1/jailhyve.raw" ] ; then
 	echo ; echo ALERT! ; echo
 	echo You need a VM disk image at $1/jailhyve.raw
 fi
 
-echo ; echo Generating the boot-jailed-vm.sh script ; echo
-cat << EOF > ${1}/boot-jailed-vm.sh
-# Adding the exec.prepare steps here as exec.prepare is not working
-kldstat -q -m vmm || kldload vmm
-kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
-kldstat -q -m vmm || { echo vmm is not loaded ; exit 1 ; }
-echo Loading nmdm if needed   
-kldstat -q -m nmdm || kldload nmdm
-kldstat -q -m nmdm || { echo nmdm failed to load ; exit 1 ; }
+echo ; echo Generating the launch-jailed-vm.sh script ; echo
+cat << EOF > ${1}/launch-jailed-vm.sh
+jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve || \
+	{ echo Jail failed to launch ; exit 1 ; }
 
-echo Manually configuring VM networking but not cleaning previous configuration
-
-ifconfig tap0 create
-ifconfig bridge0 create
-ifconfig bridge0 addm em0 addm tap0
-ifconfig bridge0 up
-
-ifconfig bridge0
-
-echo Setting net.link.tap.up_on_open=1
-sysctl net.link.tap.up_on_open=1
-
-jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve ; jls
+jls
 echo
 echo You can connect to the VM with:
 echo "cu -l /dev/nmdm1B"
