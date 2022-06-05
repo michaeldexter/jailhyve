@@ -48,4 +48,14 @@ Boot and view the VM with a VNC client such as TigerVNC:
 
 vncviewer 10.0.0.111:5900
 
-Note that bhyve(8) errors are logged to error.log
+
+Notes
+
+bhyve(8) errors are logged to error.log
+
+Run the manual-launch.sh script to verify the non-jailed syntax
+
+The bhyve(8) syntax is not de-duplicated, meaning that if you change it, you
+will want to change it in three places
+
+This is all very volatile but hey, it is development in public

@@ -181,15 +181,25 @@ done
 
 echo Generating the exec.prepare script
 cat << EOF > ${1}/exec.prepare
+#!/bin/sh
 echo Entering exec.prepare on the host
+
 kldstat -q -m vmm || kldload vmm
 kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
-kldstat -q -m vmm || { echo vmm is not loaded ; exit 1 ; }
+kldstat -q -m vmm || { echo vmm failed to load ; exit 1 ; }
 echo Loading nmdm if needed
 kldstat -q -m nmdm || kldload nmdm
 kldstat -q -m nmdm || { echo nmdm failed to load ; exit 1 ; }
 
-echo Manually configuring VM networking but not cleaning previous configuration
+echo Tearing down VM networking and re-creating
+
+# Sure would be nice to have an ifconfig -q test to determine if an interface
+# exists, no more, no less
+
+[ -e /dev/tap0 ] && ifconfig tap0 destroy
+[ -e /dev/bridge0 ] && ifconfig bridge0 destroy
+
+echo Building up VM networking
 
 ifconfig tap0 create
 ifconfig bridge0 create
@@ -198,6 +208,8 @@ ifconfig bridge0 addm tap0
 ifconfig bridge0 up
 
 ifconfig bridge0
+
+# Not preserving the state of these
 
 echo Setting net.link.tap.up_on_open=1
 sysctl net.link.tap.up_on_open=1
@@ -213,6 +225,7 @@ EOF
 
 echo Generating the exec.prestart script
 cat << EOF > ${1}/exec.prestart
+#!/bin/sh
 echo Entering exec.prestart on the host
 
 echo Destroying /dev/vmm/jailhyve if needed
@@ -390,8 +403,27 @@ fi
 #cat ${1}/etc/rc
 
 
+echo Generaing a manual bhyve launch script just to be safe
+
+cat << EOF > ${1}/manual-launch.sh
+[ -e /dev/vmm/jailhyve ] && \
+	{ bhyvectl --destroy --vm=jailhyve ; sleep 2 ; }
+
+bhyve -c 1 -m 1024 -A -H -P \\
+        -s 0,hostbridge \\
+        -s 31,lpc \\
+        -l com1,stdio \\
+        -s 2,virtio-blk,jailhyve.raw \\
+        -s 3,virtio-net,tap0 \\
+        -l bootrom,/usr/local/share/uefi-firmware/BHYVE_UEFI.fd \\
+        -s 30:0,fbuf,tcp=0.0.0.0:5900,w=640,h=480,wait \\
+        -s 30:1,xhci,tablet \\
+        jailhyve
+EOF
+
 echo Generating the exec.stop script
 cat << EOF > ${1}/etc/rc.shutdown
+#!/bin/sh
 # exec.stop = "/bin/sh /etc/rc.shutdown jail";
 pkill bhyve
 sleep 5
@@ -409,6 +441,7 @@ EOF
 
 echo Gengerating the exec.poststop script
 cat << EOF > ${1}/exec.poststop
+#!/bin/sh
 echo Destroying VM if present
 [ -e /dev/vmm/jailhyve ] && bhyvectl --destroy --vm=jailhyve
 [ -e /dev/vmm/jailhyve ] && echo VM failed to destroy
@@ -439,6 +472,7 @@ fi
 
 echo ; echo Generating the launch-jailed-vm.sh script ; echo
 cat << EOF > ${1}/launch-jailed-vm.sh
+#!/bin/sh
 jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve || \\
 	{ echo Jail failed to launch ; exit 1 ; }
 
