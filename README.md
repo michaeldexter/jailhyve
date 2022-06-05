@@ -20,7 +20,8 @@ Road Block
 
 "device emulation initialization error: No such file or directory"
 
-exec.prepare is not executing
+Remove the tap device from bhyve.conf on a 13.1 or later system
+or etc/rc on a 12.x or 13.0 system
 
 
 Requirements

@@ -418,6 +418,12 @@ echo Destroying VM if present
 echo Deleting devfs ruleset 100
 devfs rule -s 100 delset
 
+echo Destroying tap0 and bridge0
+ifconfig tap0 destroy
+ifconfig bridge0 destroy
+
+ifconfig
+
 exit 0
 EOF
 
@@ -433,7 +439,7 @@ fi
 
 echo ; echo Generating the launch-jailed-vm.sh script ; echo
 cat << EOF > ${1}/launch-jailed-vm.sh
-jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve || \
+jail -r jailhyve ; jail -c -f $1/jail.conf jailhyve || \\
 	{ echo Jail failed to launch ; exit 1 ; }
 
 jls
